@@ -1,0 +1,39 @@
+name: "Bug report (PoE1 / pob)"
+description: Report a bug in pob4agents (Path of Exile 1 CLI, pob_cli)
+title: "[PoE1] "
+labels: ["bug", "game:poe1"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: pob version
+      description: Output of `pob --version`
+      placeholder: "pob4agents 0.11.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Command & reproduction steps
+      description: Exact `pob` command(s) run (never paste `POESESSID` or cookies)
+      placeholder: |
+        pob diagnose ...
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Actual vs expected behavior
+      description: Include exit code and stderr/stdout output
+    validations:
+      required: true

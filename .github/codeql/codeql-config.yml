@@ -4,3 +4,4 @@ name: pob4agents CodeQL config
 # which security queries report as unsafe sanitization.
 paths-ignore:
   - pob_cli/tests
+  - pob2_cli/tests

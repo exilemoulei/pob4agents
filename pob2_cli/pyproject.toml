@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pob24agents"
+dynamic = ["version"]
+description = "Path of Building (PoE2) headless daemon and high-SNR CLI for agents"
+license = { text = "GPL-3.0-only" }
+requires-python = ">=3.11"
+keywords = ["path-of-exile-2", "poe2", "path-of-building", "pob2", "cli", "agent"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "click>=8.1.0",
+    "httpx[socks]>=0.25.0",
+    "tabulate>=0.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "build>=1.2.0",
+    "pyinstaller>=6.0.0",
+    "ruff>=0.17.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/exilemoulei/pob4agents"
+Repository = "https://github.com/exilemoulei/pob4agents"
+Issues = "https://github.com/exilemoulei/pob4agents/issues"
+
+[project.scripts]
+pob2 = "pob2_cli.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "pob2_cli.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+pob2_cli = ["data/*.json", "data/*.json.gz", "lua/*.lua"]
+
+[tool.ruff]
+src = ["src"]
+target-version = "py311"
+line-length = 108
+extend-exclude = ["build", "dist", "*.egg-info"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "UP", "PIE", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pob2_cli"]

@@ -1,0 +1,220 @@
+name: CI (PoE2)
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "pob2_cli/**"
+      - "install-poe2.ps1"
+      - "install-poe2.sh"
+      - ".github/workflows/ci-poe2.yml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "pob2_cli/**"
+      - "install-poe2.ps1"
+      - "install-poe2.sh"
+      - ".github/workflows/ci-poe2.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# uv installs packages only; the interpreter is always the official CPython from setup-python.
+env:
+  UV_PYTHON_DOWNLOADS: never
+
+concurrency:
+  group: ci-poe2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Static checks give the same result on every OS, so they run once here.
+  lint:
+    name: Lint & architecture gate (PoE2)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          python-version: "3.14"
+          activate-environment: true
+          cache-dependency-glob: "pob2_cli/uv.lock"
+
+      - name: Install package and dev tools from the lockfile
+        # Non-editable, so tests and smoke checks run against the installed package data.
+        run: uv sync --project pob2_cli --locked --extra dev --no-editable --active
+
+      - name: Run lint & architecture gate (fast + self-test)
+        run: |
+          python3 pob2_cli/scripts/check.py --fast
+          python3 pob2_cli/scripts/check.py --self-test
+
+  test-and-package:
+    name: Test & package Windows x64 (PoE2)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          python-version: "3.14"
+          activate-environment: true
+          cache-dependency-glob: "pob2_cli/uv.lock"
+
+      - name: Install package and dev tools from the lockfile
+        # Non-editable, so tests and smoke checks run against the installed package data.
+        run: uv sync --project pob2_cli --locked --extra dev --no-editable --active
+
+      - name: Run unit tests (offline mode)
+        env:
+          POB2_OFFLINE: "1"
+        run: |
+          python -m pytest pob2_cli/tests -v
+
+      - name: Check install-poe2.ps1 Ed25519 verifier (PowerShell 7 and Windows PowerShell 5.1)
+        run: |
+          ./install-poe2.ps1 -SelfTest
+          powershell -NoProfile -ExecutionPolicy Bypass -File ./install-poe2.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "install-poe2.ps1 -SelfTest failed under Windows PowerShell 5.1" }
+
+      - name: Verify installed CLI entry point
+        run: |
+          pob2 --version
+          pob2 --help | Out-Null
+          pob2 _daemon --help | Out-Null
+
+      - name: Build Python wheel and sdist
+        run: |
+          python -m build pob2_cli --outdir dist-py
+          Get-ChildItem dist-py
+
+      - name: Build standalone Windows x64 binary (PyInstaller)
+        run: |
+          pyinstaller --noconfirm --clean pob2_cli/packaging/pob2.spec
+
+      - name: Smoke-test standalone pob2.exe (including frozen _daemon spawn)
+        run: |
+          $exe = Join-Path (Resolve-Path "dist/pob2") "pob2.exe"
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw "pob2.exe --version failed" }
+          & $exe --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "pob2.exe --help failed" }
+          & $exe _daemon --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "pob2.exe _daemon --help failed" }
+          & $exe about --json | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "pob2.exe about --json failed" }
+          & $exe ground "Spirit" --json | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "pob2.exe ground failed (missing bundled data?)" }
+          & $exe craft --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "pob2.exe craft --help failed" }
+          & $exe instill --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "pob2.exe instill --help failed" }
+
+          # Verify frozen daemon subprocess spawns and fast-fails cleanly when no engine exists
+          $rt = Join-Path $env:RUNNER_TEMP "pob2-smoke-rt"
+          New-Item -ItemType Directory -Path $rt -Force | Out-Null
+          $env:POB2_RUNTIME_DIR = $rt
+          $env:POB2_ENGINE_DIR = ""
+          $env:POB2_ROOT = ""
+          $env:POB2_OFFLINE = "1"
+          $out = & $exe status 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          if ($code -ne 1 -and $code -ne 5) {
+            throw "Expected non-zero exit (1 or 5) without engine, got $code. Output: $out"
+          }
+          if ($out -notmatch "bootstrap|engine") {
+            throw "Expected bootstrap/engine guidance in output. Output: $out"
+          }
+          Write-Host "Frozen pob2.exe smoke test passed."
+          exit 0
+
+  # Engine-less, offline tests; the real-engine gate lives in engine-poe2-{pr,release}.yml.
+  unit-posix:
+    name: Unit tests PoE2 (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux-x64, Python 3.11 floor
+            python: "3.11"
+          - os: ubuntu-latest
+            label: Linux-x64
+            python: "3.14"
+            tag: linux-x64
+          # GitHub labels its macOS 27 arm64 image xcode-27.
+          - os: xcode-27
+            label: macOS-arm64
+            python: "3.14"
+            tag: darwin-arm64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          python-version: ${{ matrix.python }}
+          activate-environment: true
+          cache-dependency-glob: "pob2_cli/uv.lock"
+
+      - name: Install package and dev tools from the lockfile
+        run: uv sync --project pob2_cli --locked --extra dev --no-editable --active
+
+      - name: Check install-poe2.sh syntax and Ed25519 self-test
+        run: |
+          bash -n install-poe2.sh
+          bash install-poe2.sh --self-test
+
+      - name: Run unit tests (offline mode)
+        env:
+          POB2_OFFLINE: "1"
+        run: |
+          python3 -m pytest pob2_cli/tests -q
+
+      # install-poe2.sh users compile or unpack this pinned 2460b3f LuaJIT runtime.
+      - name: Build native POSIX LuaJIT 2460b3f + lua-utf8 runtime
+        if: matrix.tag
+        run: |
+          chmod +x pob2_cli/packaging/build_posix_runtime.sh
+          ./pob2_cli/packaging/build_posix_runtime.sh runtime-dist
+          tar -czf "pob2-runtime-${{ matrix.tag }}.tar.gz" -C runtime-dist bin
+          ls -lh "pob2-runtime-${{ matrix.tag }}.tar.gz"
+
+      - name: Upload prebuilt POSIX runtime artifact
+        if: matrix.tag
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pob2-runtime-${{ matrix.tag }}
+          path: pob2-runtime-${{ matrix.tag }}.tar.gz

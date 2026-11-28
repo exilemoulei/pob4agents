@@ -1,4 +1,4 @@
-# pob4agents (`pob`)
+# pob4agents (`pob` / `pob2`)
 
 [简体中文](README.md) | **English**
 
@@ -7,6 +7,22 @@
 
 > [!TIP]
 > **Questions or feedback?** Drop by our [Discord server](https://discord.gg/tejgNrhjn) anytime!
+
+## Dual-Track Quick Entry: PoE1 (`pob`) vs PoE2 (`pob2`)
+
+This repository ships two physically isolated headless Path of Building CLIs that can be installed side by side without conflicts:
+
+| Track | PoE1 (`pob`) | PoE2 (`pob2`, `0.5.5+`) |
+| :--- | :--- | :--- |
+| **CLI Command** | `pob` | `pob2` |
+| **Install Scripts** | [`install.ps1`](install.ps1) / [`install.sh`](install.sh) | [`install-poe2.ps1`](install-poe2.ps1) / [`install-poe2.sh`](install-poe2.sh) |
+| **Windows Scoop** | `scoop install pob` ([`bucket/pob.json`](bucket/pob.json)) | `scoop install pob2` ([`bucket/pob2.json`](bucket/pob2.json)) |
+| **Agent Skill** | [`skills/pob/SKILL.md`](skills/pob/SKILL.md) (`pob-poe1`) | [`skills/pob2/SKILL.md`](skills/pob2/SKILL.md) (`pob-poe2`) |
+| **Highlights** | Global/TW/CN trade search & budget planner, fast Timeless Jewel seed hunt, T16/T17 map regex, stat weights & multi-variant comparison | Passwordless CN WeGame share-link import, `pob2 craft` crafting odds & MDP routes, amulet instillation & rune/soul-core Pareto ranking, resistance cap+overcap fixing & Spirit knapsack |
+
+> **PoE2 (`pob2`) Quick Start**: On Windows run `irm https://raw.githubusercontent.com/exilemoulei/pob4agents/main/install-poe2.ps1 | iex` (macOS/Linux: `curl -fsSL https://raw.githubusercontent.com/exilemoulei/pob4agents/main/install-poe2.sh | bash`), run `pob2 bootstrap` to initialize the headless PoB2 engine, and install [`skills/pob2`](skills/pob2) into your agent's skills directory.
+
+---
 
 `pob4agents` is a [**PathOfBuilding**](https://github.com/PathOfBuildingCommunity/PathOfBuilding) toolkit built specifically for AI agents.
 

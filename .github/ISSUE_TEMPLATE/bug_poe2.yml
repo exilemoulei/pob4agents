@@ -1,0 +1,39 @@
+name: "Bug report (PoE2 / pob2)"
+description: Report a bug in pob24agents (Path of Exile 2 CLI, pob2_cli)
+title: "[PoE2] "
+labels: ["bug", "game:poe2"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: pob2 version
+      description: Output of `pob2 --version`
+      placeholder: "pob24agents 0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Windows
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Command & reproduction steps
+      description: Exact `pob2` command(s) run (never paste private tokens or share codes)
+      placeholder: |
+        pob2 diagnose ...
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Actual vs expected behavior
+      description: Include exit code and stderr/stdout output
+    validations:
+      required: true

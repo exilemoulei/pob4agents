@@ -1,4 +1,4 @@
-# pob4agents (`pob`)
+# pob4agents (`pob` / `pob2`)
 
 **简体中文** | [English](README_EN.md)
 
@@ -8,6 +8,22 @@
 
 > [!TIP]
 > **有问题随时来反馈！** QQ 群：`1062048472` ｜ [加入 Discord 社群](https://discord.gg/tejgNrhjn)
+
+## 双轨快速入口：PoE1（`pob`） vs PoE2（`pob2`）
+
+本仓库并行维护两套物理隔离的无头 Path of Building 工具链，互不冲突，可同时安装在同一台机器上：
+
+| 维度 | PoE1（`pob`） | PoE2（`pob2`，`0.5.5+`） |
+| :--- | :--- | :--- |
+| **命令名** | `pob` | `pob2` |
+| **一键安装脚本** | [`install.ps1`](install.ps1) / [`install.sh`](install.sh) | [`install-poe2.ps1`](install-poe2.ps1) / [`install-poe2.sh`](install-poe2.sh) |
+| **Windows Scoop** | `scoop install pob`（[`bucket/pob.json`](bucket/pob.json)） | `scoop install pob2`（[`bucket/pob2.json`](bucket/pob2.json)） |
+| **Agent Skill** | [`skills/pob/SKILL.md`](skills/pob/SKILL.md)（`pob-poe1`） | [`skills/pob2/SKILL.md`](skills/pob2/SKILL.md)（`pob-poe2`） |
+| **核心亮点** | 国际服/台服/国服市集与造价评估、永恒珠宝秒搜、T16/T17 刷图正则、词缀权重与多方案对比 | 国服 WeGame 免密分享链接导入、`pob2 craft` 做装概率与 MDP 路线、涂灌/符文灵魂核心帕累托榜、抗性补满留余量与精魂背包 |
+
+> **PoE2（`pob2`）快速上手**：Windows 运行 `irm https://raw.githubusercontent.com/exilemoulei/pob4agents/main/install-poe2.ps1 | iex`（macOS/Linux 运行 `curl -fsSL https://raw.githubusercontent.com/exilemoulei/pob4agents/main/install-poe2.sh | bash`），随后执行 `pob2 bootstrap` 初始化引擎，并将 [`skills/pob2`](skills/pob2) 挂载到你的 Agent 技能目录。
+
+---
 
 `pob4agents` 是专为AI打造的 [**PathOfBuilding**](https://github.com/PathOfBuildingCommunity/PathOfBuilding) 工具
 

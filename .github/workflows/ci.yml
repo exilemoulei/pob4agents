@@ -3,10 +3,18 @@ name: CI
 on:
   push:
     branches: ["main"]
-    paths-ignore: ["skills/**", "docs/**", "*.md", "bucket/**"]
+    paths:
+      - "pob_cli/**"
+      - "install.ps1"
+      - "install.sh"
+      - ".github/workflows/ci.yml"
   pull_request:
     branches: ["main"]
-    paths-ignore: ["skills/**", "docs/**", "*.md", "bucket/**"]
+    paths:
+      - "pob_cli/**"
+      - "install.ps1"
+      - "install.sh"
+      - ".github/workflows/ci.yml"
   workflow_dispatch:
 
 permissions:

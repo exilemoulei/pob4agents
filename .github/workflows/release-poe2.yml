@@ -1,0 +1,635 @@
+name: Release (PoE2)
+
+# prepare -> gate (clean real PoB2 engine) + builds (no write access) -> assemble (checksums; dry runs
+#   sign with a throwaway key and verify) -> sign (tag runs only, environment "release": sign with the
+#   release key, verify) -> publish (draft, upload, verify, publish with --latest=false so PoE1
+#   /releases/latest is never hijacked) -> installer tests -> Scoop PR (bucket/pob2.json), PyPI (pob24agents).
+on:
+  push:
+    tags: ["poe2-v*"]
+  workflow_dispatch:
+  pull_request:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/release-poe2.yml"
+      - "pob2_cli/packaging/**"
+      - "pob2_cli/pyproject.toml"
+      - "install-poe2.ps1"
+      - "install-poe2.sh"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-poe2-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# uv installs packages only; the interpreter is always the official CPython from setup-python.
+env:
+  UV_PYTHON_DOWNLOADS: never
+
+jobs:
+  prepare:
+    name: Resolve PoE2 version and commit
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      dry_run: ${{ steps.meta.outputs.dry_run }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve tag, version and commit
+        id: meta
+        # Values reach the script through env, never ${{ }}, so a crafted tag cannot inject shell.
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version_re='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+          read_version() { git show "$1:pob2_cli/src/pob2_cli/__init__.py" | sed -nE 's/^__version__ = "([^"]+)"$/\1/p'; }
+          sha="$(git rev-parse HEAD)"
+          version="$(read_version "$sha")"
+          if [ "$REF_TYPE" = tag ]; then
+            dry_run=false
+            tag="$REF_NAME"
+            if [ "poe2-v$version" != "$tag" ]; then
+              echo "::error::Tag $tag does not match __version__ '$version' (expected poe2-v$version) at that commit."
+              exit 1
+            fi
+            if [ "$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || echo none)" = false ]; then
+              echo "::error::$tag is already published; releases are never replaced."
+              exit 1
+            fi
+          else
+            dry_run=true
+            tag="poe2-v$version"
+          fi
+          if ! [[ "$version" =~ $version_re ]]; then
+            echo "::error::__version__ '$version' is not X.Y.Z or X.Y.Z-pre."
+            exit 1
+          fi
+          prerelease=false
+          if [[ "$version" == *-* ]]; then prerelease=true; fi
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "dry_run=$dry_run"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+          echo "PoE2 Release $tag (version $version, commit $sha, dry run: $dry_run, prerelease: $prerelease)"
+
+  # Nothing is published unless the clean real-engine gate passes on Windows, macOS, and Linux.
+  gate:
+    name: Real-engine gate (PoE2)
+    needs: prepare
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/engine-poe2-release.yml
+
+  build-python:
+    name: Build wheel and sdist (pob24agents)
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          python-version: "3.14"
+          activate-environment: true
+          enable-cache: false
+
+      - name: Install build tools from the lockfile
+        run: uv sync --project pob2_cli --locked --extra dev --no-editable --active
+
+      - name: Build wheel and sdist
+        run: python -m build pob2_cli --outdir dist-python
+
+      - name: Check wheel installs and runs pob2
+        run: |
+          set -euo pipefail
+          uv venv "$RUNNER_TEMP/check-venv"
+          uv pip install --python "$RUNNER_TEMP/check-venv" dist-python/*.whl
+          "$RUNNER_TEMP/check-venv/bin/pob2" --version
+
+      - name: Upload Python distributions
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: asset-python
+          path: dist-python/*
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows x64 (pob2)
+    needs: prepare
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          python-version: "3.14"
+          activate-environment: true
+          enable-cache: false
+
+      - name: Install package and build tools from the lockfile
+        run: uv sync --project pob2_cli --locked --extra dev --no-editable --active
+
+      - name: Build standalone pob2.exe (PyInstaller onedir)
+        run: pyinstaller --noconfirm --clean pob2_cli/packaging/pob2.spec
+
+      - name: Smoke-test standalone pob2.exe (including frozen _daemon spawn)
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          $exe = Join-Path (Resolve-Path "dist/pob2") "pob2.exe"
+          $ver = (& $exe --version).Trim()
+          if ($LASTEXITCODE -ne 0 -or ($ver -split ' ')[-1] -ne $env:VERSION) {
+            throw "Unexpected pob2.exe --version output: '$ver' (exit $LASTEXITCODE)"
+          }
+          & $exe about --json | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "pob2.exe about --json failed" }
+          & $exe ground "Spirit" --json | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "pob2.exe ground failed" }
+          & $exe craft --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "pob2.exe craft --help failed" }
+          & $exe instill --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "pob2.exe instill --help failed" }
+          $rt = Join-Path $env:RUNNER_TEMP "pob2-release-smoke-rt"
+          New-Item -ItemType Directory -Path $rt -Force | Out-Null
+          $env:POB2_RUNTIME_DIR = $rt
+          $env:POB2_ENGINE_DIR = ""
+          $env:POB2_ROOT = ""
+          $env:POB2_OFFLINE = "1"
+          $out = & $exe status 2>&1 | Out-String
+          if (($LASTEXITCODE -ne 1 -and $LASTEXITCODE -ne 5) -or $out -notmatch "bootstrap|engine") {
+            throw "Frozen daemon smoke test failed (exit $LASTEXITCODE): $out"
+          }
+          Write-Host "Standalone pob2.exe smoke test passed ($ver)."
+          exit 0
+
+      - name: Package the zip and its alias
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          python pob2_cli/packaging/release_tools.py pack-windows --dist dist/pob2 --out dist-windows --version $env:VERSION
+          if ($LASTEXITCODE -ne 0) { throw "release_tools.py pack-windows failed" }
+
+      - name: Upload Windows assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: asset-windows-x64
+          path: dist-windows/*
+          if-no-files-found: error
+
+  build-posix:
+    name: Build ${{ matrix.platform }} (pob2)
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            runner: xcode-27
+            container: ""
+          - platform: macos-x64
+            runner: macos-26-intel
+            container: ""
+          - platform: linux-x64
+            runner: ubuntu-24.04
+            container: python:3.14-slim-bookworm@sha256:3fe1a0b6c2d6b2ebb572906cdabeca75aeb558c0c17db5ffefbcf8094871c32b
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            container: python:3.14-slim-bookworm@sha256:3fe1a0b6c2d6b2ebb572906cdabeca75aeb558c0c17db5ffefbcf8094871c32b
+    steps:
+      - name: Install build tools (Linux container)
+        if: runner.os == 'Linux'
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential binutils curl ca-certificates git
+
+      - name: Checkout release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14 (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          python-version: "3.14"
+          activate-environment: true
+          enable-cache: false
+
+      - name: Install package and build tools from the lockfile
+        run: uv sync --project pob2_cli --locked --extra dev --no-editable --active
+
+      - name: Build the LuaJIT 2460b3f + lua-utf8 runtime from pinned sources
+        run: bash pob2_cli/packaging/build_posix_runtime.sh runtime-dist
+
+      - name: Build standalone pob2 with the runtime inside (PyInstaller onedir)
+        env:
+          POB2_BUNDLE_RUNTIME: runtime-dist
+        run: pyinstaller --noconfirm --clean pob2_cli/packaging/pob2.spec
+
+      - name: Smoke-test standalone pob2
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          exe="dist/pob2/pob2"
+          ver="$("$exe" --version)"
+          [ "${ver##* }" = "$VERSION" ] || { echo "::error::pob2 --version printed '$ver', expected $VERSION"; exit 1; }
+          "$exe" about --json >/dev/null
+          "$exe" ground "Spirit" --json >/dev/null
+          "$exe" craft --help >/dev/null
+          "$exe" instill --help >/dev/null
+          runtime="$(dirname "$exe")/_internal/runtime/bin"
+          [ -x "$runtime/luajit" ] || { echo "::error::no bundled runtime at $runtime"; exit 1; }
+          LUA_CPATH="$runtime/?.so;;" "$runtime/luajit" -e \
+            'local c = 1; c += 41; assert(c == 42); assert(require("lua-utf8").len("ab") == 2)'
+          rt="$(mktemp -d)"
+          trap 'rm -rf "$rt"' EXIT
+          set +e
+          out="$(POB2_ROOT="" POB2_ENGINE_DIR="" POB2_RUNTIME_DIR="$rt" POB2_OFFLINE=1 "$exe" status 2>&1)"
+          code=$?
+          set -e
+          if [ "$code" -ne 1 ] && [ "$code" -ne 5 ]; then
+            echo "::error::pob2 status without an engine exited $code, expected 1 or 5: $out"
+            exit 1
+          fi
+          echo "Standalone pob2 smoke test passed ($ver)."
+
+      - name: Package the build, its alias and the runtime
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          python pob2_cli/packaging/release_tools.py pack-posix --dist dist/pob2 --runtime runtime-dist \
+            --out dist-posix --version "$VERSION" --platform "$PLATFORM"
+
+      - name: Upload ${{ matrix.platform }} assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: asset-${{ matrix.platform }}
+          path: dist-posix/*
+          if-no-files-found: error
+
+  assemble:
+    name: Checksums and verification (PoE2)
+    needs: [prepare, build-python, build-windows, build-posix]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Download build outputs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: asset-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Write SHA256SUMS.txt
+        run: python pob2_cli/packaging/release_tools.py sums --dir release-assets
+
+      - name: Dry run - sign with a throwaway key and verify the file set
+        if: needs.prepare.outputs.dry_run == 'true'
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          tools=pob2_cli/packaging/release_tools.py
+          key="$RUNNER_TEMP/throwaway-signing-key.pem"
+          trap 'rm -f "$key"' EXIT
+          python "$tools" keygen --out "$key" > /dev/null
+          python "$tools" sign --dir release-assets --key "$key"
+          python "$tools" verify --dir release-assets --version "$VERSION" --public-key "$(python "$tools" pubkey --key "$key")"
+
+      - name: Upload the checksummed files for signing
+        if: needs.prepare.outputs.dry_run == 'false'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-unsigned
+          path: release-assets/*
+          if-no-files-found: error
+
+  sign:
+    name: Sign and verify (PoE2)
+    needs: [prepare, assemble]
+    if: needs.prepare.outputs.dry_run == 'false'
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Download the checksummed files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-unsigned
+          path: release-assets
+
+      - name: Sign SHA256SUMS.txt, then verify against pob2 public keys
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          tools=pob2_cli/packaging/release_tools.py
+          if [ -z "$SIGNING_KEY" ]; then
+            echo "::error::The RELEASE_SIGNING_KEY secret is not set in the release environment; releases must be signed."
+            exit 1
+          fi
+          key="$RUNNER_TEMP/release-signing-key.pem"
+          trap 'rm -f "$key"' EXIT
+          (umask 077; printf '%s\n' "$SIGNING_KEY" > "$key")
+          python "$tools" sign --dir release-assets --key "$key"
+          rm -f "$key"
+          python "$tools" verify --dir release-assets --version "$VERSION"
+
+      - name: Upload release assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release (PoE2)
+    needs: [prepare, gate, sign]
+    if: needs.prepare.outputs.dry_run == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Download release assets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: release-assets
+
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: release-assets/SHA256SUMS.txt
+
+      - name: Create or refresh the draft release
+        run: |
+          set -euo pipefail
+          python pob2_cli/packaging/release_tools.py notes --version "$VERSION" > "$RUNNER_TEMP/notes.md"
+          state="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || echo none)"
+          if [ "$state" = false ]; then
+            echo "::error::$TAG is already published; releases are never replaced."
+            exit 1
+          elif [ "$state" = true ]; then
+            gh release view "$TAG" --json assets --jq '.assets[].name' | while read -r name; do
+              [ -f "release-assets/$name" ] || gh release delete-asset "$TAG" "$name" --yes
+            done
+          else
+            pre=()
+            if [ "$PRERELEASE" = true ]; then pre=(--prerelease); fi
+            notes_start=()
+            prev_tag="$(git tag -l 'poe2-v[0-9]*' --sort=-v:refname | awk -v cur="$TAG" 'found { print; exit } $0 == cur { found = 1 }' || true)"
+            if [ -z "$prev_tag" ]; then
+              prev_tag="$(git tag -l 'poe2-v[0-9]*' --sort=-v:refname | grep -vxF "$TAG" | head -n 1 || true)"
+            fi
+            if [ -n "$prev_tag" ]; then notes_start=(--notes-start-tag "$prev_tag"); fi
+            gh release create "$TAG" --draft --latest=false --verify-tag "${pre[@]}" "${notes_start[@]}" \
+              --title "pob24agents $TAG" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
+          fi
+          gh release upload "$TAG" release-assets/* --clobber
+
+      - name: Verify the uploaded files
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --dir "$RUNNER_TEMP/uploaded"
+          python pob2_cli/packaging/release_tools.py verify --dir "$RUNNER_TEMP/uploaded" --version "$VERSION"
+
+      - name: Publish (never hijack /releases/latest)
+        # PoE2 releases ALWAYS pass --latest=false so PoE1's /releases/latest channel stays isolated.
+        run: |
+          if [ "$PRERELEASE" = true ]; then
+            gh release edit "$TAG" --draft=false --prerelease --latest=false
+          else
+            gh release edit "$TAG" --draft=false --latest=false
+          fi
+
+  installer-posix:
+    name: Install with install-poe2.sh (${{ matrix.os }})
+    needs: [prepare, publish]
+    if: >-
+      always() && needs.prepare.result == 'success' &&
+      (needs.publish.result == 'success' || needs.prepare.outputs.dry_run == 'true')
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, xcode-27]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up uv (for fallback wheel install)
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          enable-cache: false
+
+      - name: Verify install-poe2.sh
+        env:
+          DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          bash -n install-poe2.sh
+          bash install-poe2.sh --self-test
+          if [ "$DRY_RUN" = false ]; then
+            export POB2_INSTALL_DIR="$RUNNER_TEMP/pob2-install" POB2_BIN_DIR="$RUNNER_TEMP/pob2-bin"
+            export POB2_VERSION="$VERSION"
+            bash install-poe2.sh
+            export PATH="$POB2_BIN_DIR:$HOME/.local/bin:$PATH"
+            ver="$(pob2 --version)"
+            [ "${ver##* }" = "$VERSION" ] || { echo "::error::install-poe2.sh installed '$ver', expected $VERSION"; exit 1; }
+            [ -L "$POB2_BIN_DIR/pob2" ] || { echo "::error::install-poe2.sh did not install the standalone build"; exit 1; }
+            echo "install-poe2.sh OK: $ver"
+          fi
+
+  installer:
+    name: Install with install-poe2.ps1
+    needs: [prepare, publish]
+    if: >-
+      always() && needs.prepare.result == 'success' &&
+      (needs.publish.result == 'success' || needs.prepare.outputs.dry_run == 'true')
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify install-poe2.ps1
+        env:
+          DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          ./install-poe2.ps1 -SelfTest
+          powershell -NoProfile -ExecutionPolicy Bypass -File ./install-poe2.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "install-poe2.ps1 -SelfTest failed under Windows PowerShell 5.1" }
+          if ($env:DRY_RUN -eq "false") {
+            $dir = Join-Path $env:RUNNER_TEMP "pob2-install"
+            ./install-poe2.ps1 -InstallDir $dir -NoPath -Version $env:VERSION
+            $ver = (& (Join-Path $dir "pob2.exe") --version).Trim()
+            if ($LASTEXITCODE -ne 0) { throw "Installed pob2.exe --version failed: $ver" }
+            if (($ver -split ' ')[-1] -ne $env:VERSION) {
+              throw "install-poe2.ps1 installed '$ver', expected $env:VERSION"
+            }
+            Write-Host "install-poe2.ps1 OK: $ver"
+          }
+
+  scoop:
+    name: Update the Scoop manifest (bucket/pob2.json)
+    needs: [prepare, publish, installer, installer-posix]
+    if: needs.prepare.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: true
+
+      - name: Open and merge the manifest PR
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --pattern SHA256SUMS.txt --dir "$RUNNER_TEMP"
+          zip="pob24agents-$VERSION-windows-x64.zip"
+          sha="$(awk -v f="$zip" '$2 == f || $2 == "*" f { print $1 }' "$RUNNER_TEMP/SHA256SUMS.txt")"
+          [ -n "$sha" ] || { echo "::error::$zip is missing from SHA256SUMS.txt"; exit 1; }
+          python3 pob2_cli/packaging/release_tools.py update-scoop --manifest bucket/pob2.json --version "$VERSION" --sha256 "$sha"
+          if git diff --quiet -- bucket/pob2.json; then
+            echo "bucket/pob2.json already points at $TAG."
+            exit 0
+          fi
+          branch="release/scoop-$TAG"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add bucket/pob2.json
+          git commit -m "chore(scoop): update pob2 manifest to $TAG"
+          remote_sha="$(git ls-remote --heads origin "refs/heads/$branch" | cut -f1)"
+          if [ -n "$remote_sha" ]; then
+            git push --force-with-lease="refs/heads/$branch:$remote_sha" origin "$branch"
+          else
+            git push origin "$branch"
+          fi
+          url="$(gh pr list --head "$branch" --base main --state open --json url --jq '.[0].url // empty')"
+          if [ -z "$url" ]; then
+            url="$(gh pr create --base main --head "$branch" \
+              --title "chore(scoop): update pob2 manifest to $TAG" \
+              --body "Points \`scoop update pob2\` and PoE2 installers at the $TAG release. Opened by the PoE2 release workflow.")"
+          fi
+          gh pr merge "$url" --squash --delete-branch
+
+  publish-pypi:
+    name: Publish pob24agents to PyPI
+    needs: [prepare, publish, installer, installer-posix]
+    if: vars.ENABLE_PYPI == 'true' && needs.prepare.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pob24agents
+    permissions:
+      id-token: write
+    steps:
+      - name: Download pob24agents
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: asset-python
+          path: dist/
+
+      - name: Publish to PyPI via Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3

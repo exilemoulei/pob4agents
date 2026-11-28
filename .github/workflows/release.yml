@@ -434,6 +434,7 @@ jobs:
       - name: Checkout release commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-tags: true
           persist-credentials: false
 
       - name: Set up Python 3.14
@@ -469,7 +470,13 @@ jobs:
           else
             pre=()
             if [ "$PRERELEASE" = true ]; then pre=(--prerelease); fi
-            gh release create "$TAG" --draft --verify-tag "${pre[@]}" \
+            notes_start=()
+            prev_tag="$(git tag -l 'v[0-9]*' --sort=-v:refname | awk -v cur="$TAG" 'found { print; exit } $0 == cur { found = 1 }' || true)"
+            if [ -z "$prev_tag" ]; then
+              prev_tag="$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -vxF "$TAG" | head -n 1 || true)"
+            fi
+            if [ -n "$prev_tag" ]; then notes_start=(--notes-start-tag "$prev_tag"); fi
+            gh release create "$TAG" --draft --verify-tag "${pre[@]}" "${notes_start[@]}" \
               --title "pob4agents $TAG" --notes-file "$RUNNER_TEMP/notes.md" --generate-notes
           fi
           gh release upload "$TAG" release-assets/* --clobber

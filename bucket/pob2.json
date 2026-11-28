@@ -1,0 +1,33 @@
+{
+    "version": "0.1.0",
+    "description": "Path of Building (PoE2) headless daemon, craft solver, and high-SNR CLI for AI agents",
+    "homepage": "https://github.com/exilemoulei/pob4agents",
+    "license": "GPL-3.0-only",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/exilemoulei/pob4agents/releases/download/poe2-v0.1.0/pob24agents-0.1.0-windows-x64.zip",
+            "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+        }
+    },
+    "bin": "pob2.exe",
+    "pre_install": "if (Get-Command pob2 -ErrorAction SilentlyContinue) { try { & pob2 stop 2>$null | Out-Null } catch {} }",
+    "pre_uninstall": "if (Test-Path \"$dir\\pob2.exe\") { try { & \"$dir\\pob2.exe\" stop 2>$null | Out-Null } catch {} }",
+    "notes": [
+        "Run `pob2 bootstrap` (or `pob2 bootstrap --proxy http://127.0.0.1:7890`) once to install the headless PoB2 slim engine.",
+        "Runtime state and managed engine live in %LOCALAPPDATA%\\pob24agents (override with POB2_RUNTIME_DIR)."
+    ],
+    "checkver": {
+        "url": "https://raw.githubusercontent.com/exilemoulei/pob4agents/main/bucket/pob2.json",
+        "jsonpath": "$.version"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/exilemoulei/pob4agents/releases/download/poe2-v$version/pob24agents-$version-windows-x64.zip"
+            }
+        },
+        "hash": {
+            "url": "$baseurl/SHA256SUMS.txt"
+        }
+    }
+}
